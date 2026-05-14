@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew install *)",
+      "Bash(python3.11 --version)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)"
+    ]
+  }
+}
