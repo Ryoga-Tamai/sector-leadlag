@@ -1,6 +1,8 @@
 """Unit tests for src/pca_engine.py.
 
-All tests use the paper's canonical dimensions: n_us=11, n_jp=17, K=3.
+All tests use the v3 fixed universe dimensions: n_us=9, n_jp=17, K=3.
+Masks are sourced from src.universe.get_universe_masks() so that the test
+suite exercises the exact same classification used in production.
 """
 
 import numpy as np
@@ -13,31 +15,26 @@ from src.pca_engine import (
     compute_regularized_correlation,
     extract_top_eigenvectors,
 )
+from src.universe import N_JP, N_US, get_universe_masks
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-N_US = 11
-N_JP = 17
-N = N_US + N_JP
+N = N_US + N_JP  # 26
 K = 3
 
 
-def _make_masks() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stable sector classification masks matching US-11 / JP-17 paper layout."""
-    us_cyc = np.array([True, True, True, True, False, False, False, False, False, False, False])
-    us_def = np.array([False, False, False, False, True, True, True, False, False, False, False])
-    jp_cyc = np.array([True, True, True, True, True, True, False, False, False,
-                       False, False, False, False, False, False, False, False])
-    jp_def = np.array([False, False, False, False, False, False, True, True, True,
-                       True, False, False, False, False, False, False, False])
-    return us_cyc, us_def, jp_cyc, jp_def
-
-
 def _make_prior_subspace() -> np.ndarray:
-    us_cyc, us_def, jp_cyc, jp_def = _make_masks()
-    return build_prior_subspace(N_US, N_JP, us_cyc, us_def, jp_cyc, jp_def)
+    masks = get_universe_masks()
+    return build_prior_subspace(
+        N_US,
+        N_JP,
+        masks["us_cyclical"],
+        masks["us_defensive"],
+        masks["jp_cyclical"],
+        masks["jp_defensive"],
+    )
 
 
 def _make_spd_matrix(size: int, rng: np.random.Generator) -> np.ndarray:
@@ -49,7 +46,19 @@ def _make_spd_matrix(size: int, rng: np.random.Generator) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# 1. Orthogonality of prior subspace
+# 1. Universe dimensions sanity check
+# ---------------------------------------------------------------------------
+
+
+def test_universe_dimensions_v3():
+    """Ensure src.universe is on the v3 fixed (9, 17, 26) universe."""
+    assert N_US == 9
+    assert N_JP == 17
+    assert N == 26
+
+
+# ---------------------------------------------------------------------------
+# 2. Orthogonality of prior subspace
 # ---------------------------------------------------------------------------
 
 
@@ -66,7 +75,7 @@ def test_prior_subspace_orthogonality():
 
 
 # ---------------------------------------------------------------------------
-# 2. Global factor has equal elements
+# 3. Global factor has equal elements
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +87,24 @@ def test_prior_subspace_global_factor():
 
 
 # ---------------------------------------------------------------------------
-# 3. Target correlation has unit diagonal
+# 4. Country spread factor: US block positive, JP block negative (or vice versa)
+# ---------------------------------------------------------------------------
+
+
+def test_prior_subspace_country_factor_signs():
+    V0 = _make_prior_subspace()
+    v2 = V0[:, 1]
+    us_block = v2[:N_US]
+    jp_block = v2[N_US:]
+    # Signs are consistent within each block, and opposite between blocks.
+    # (Overall sign of an eigenvector is arbitrary; check sign consistency.)
+    assert np.all(us_block * us_block[0] > 0), "US block has mixed signs in v2"
+    assert np.all(jp_block * jp_block[0] > 0), "JP block has mixed signs in v2"
+    assert us_block[0] * jp_block[0] < 0, "US and JP blocks should have opposite signs"
+
+
+# ---------------------------------------------------------------------------
+# 5. Target correlation has unit diagonal
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +120,7 @@ def test_target_correlation_diagonal():
 
 
 # ---------------------------------------------------------------------------
-# 4. Extreme-lambda cases for regularised correlation
+# 6. Extreme-lambda cases for regularised correlation
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +134,7 @@ def test_regularized_correlation_extreme_cases():
 
 
 # ---------------------------------------------------------------------------
-# 5. Eigenvector extraction shape
+# 7. Eigenvector extraction shape
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +149,7 @@ def test_extract_eigenvectors_shape():
 
 
 # ---------------------------------------------------------------------------
-# 6. Lead-lag signal shape
+# 8. Lead-lag signal shape
 # ---------------------------------------------------------------------------
 
 

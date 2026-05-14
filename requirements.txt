@@ -1,8 +1,18 @@
+# 数値計算（PCA エンジンの固有値分解、行列演算で使用）
 numpy>=1.26
+# 科学計算（将来の統計関数 scipy.stats.spearmanr など SECTION 2D で使用予定）
 scipy>=1.11
+# データ操作（共通営業日インターセクション、リターン系列、シグナル DataFrame）
 pandas>=2.1
+# 米国/日本株価データ取得（auto_adjust=True で配当・分割調整済み OHLC）
 yfinance>=0.2.40
+# LINE Messaging API 直叩き（SECTION 6 で push エンドポイントを叩く）
 requests>=2.31
+# .env からの環境変数読み込み（LINE トークン、運用額など）
 python-dotenv>=1.0
+# 検証レイヤーの累積 IC プロット・分位スプレッド棒グラフなど
 matplotlib>=3.8
+# 単体テスト実行
 pytest>=7.4
+# Notebook 実行（notebooks/01_paper_replication.ipynb など）
+jupyter>=1.0
