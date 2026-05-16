@@ -41,11 +41,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        # v6 は Node.js 24 ネイティブ対応。Node.js 20 を使う @v4 は 2026-06-02 に
+        # forced upgrade、2026-09-16 に removal が予定されているため先回りで bump。
+        uses: actions/checkout@v6
         # fetch-depth=1（既定）で十分。auto-commit は HEAD への 1 コミット追加のみ。
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        # v6 は Node.js 24 ネイティブ対応（@v5 は Node.js 20）。
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'              # pip キャッシュで毎日の起動を高速化
