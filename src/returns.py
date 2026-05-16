@@ -67,7 +67,12 @@ def compute_cc_returns(prices_close: pd.DataFrame) -> pd.DataFrame:
             f"prices_close.index must be a DatetimeIndex, got {type(prices_close.index).__name__}"
         )
 
-    return prices_close.pct_change()
+    # fill_method=None propagates NaN instead of silently forward-filling
+    # (the default pandas behavior emits a FutureWarning and would mask
+    # missing prices, defeating downstream NaN checks in generate_signal).
+    # For clean (post-intersection) inputs the output is identical to
+    # pct_change()'s legacy default, preserving SECTION 2 parity.
+    return prices_close.pct_change(fill_method=None)
 
 
 def compute_oc_returns(
