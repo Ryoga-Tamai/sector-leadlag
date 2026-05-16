@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="日米業種リードラグ投資ツール — 個人用ダッシュボード">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Sector Lead-Lag Dashboard</title>
+  <link rel="stylesheet" href="./style.css">
+  <!-- Plotly.js: バージョン固定 (requirements_v3 / sections_v3 SECTION 10 準拠) -->
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1 class="site-title">Sector Lead-Lag Dashboard</h1>
+      <p class="site-subtitle">日米業種リードラグ投資ツール — 26 銘柄固定ユニバース</p>
+      <p class="last-updated">
+        最終更新: <span id="last-updated">—</span>
+      </p>
+      <p class="disclaimer">
+        ⚠️ 個人用ツールです。投資判断は自己責任で行ってください。本ダッシュボードはいかなる投資助言も提供しません。
+      </p>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- 1. 現在のシグナル -->
+    <section id="current-signal" class="card-section" aria-labelledby="current-signal-title">
+      <header class="section-header">
+        <h2 id="current-signal-title">現在のシグナル</h2>
+        <p class="section-meta">対象日: <span id="signal-date">—</span></p>
+      </header>
+      <div class="signal-grid">
+        <div class="basket basket-long">
+          <h3 class="basket-title">
+            <span class="basket-badge basket-badge-long">LONG</span>
+            上位 5 銘柄
+          </h3>
+          <ul id="long-basket" class="basket-list" aria-live="polite"></ul>
+        </div>
+        <div class="basket basket-short">
+          <h3 class="basket-title">
+            <span class="basket-badge basket-badge-short">SHORT</span>
+            下位 5 銘柄
+          </h3>
+          <ul id="short-basket" class="basket-list" aria-live="polite"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. ファクタースコア -->
+    <section id="factor-scores" class="card-section" aria-labelledby="factor-scores-title">
+      <header class="section-header">
+        <h2 id="factor-scores-title">ファクタースコア（最新）</h2>
+        <p class="section-meta">
+          PC1 / PC2 / PC3 の当日推定値。history に factor_scores が蓄積されたら時系列表示に拡張予定。
+        </p>
+      </header>
+      <div id="factor-scores-chart" class="chart-area" role="img" aria-label="ファクタースコア棒グラフ"></div>
+    </section>
+
+    <!-- 3. 累積パフォーマンス（コスト効果） -->
+    <section id="performance" class="card-section" aria-labelledby="performance-title">
+      <header class="section-header">
+        <h2 id="performance-title">累積コスト効果（リバランス由来）</h2>
+        <p class="section-meta">
+          history の銘柄入替（turnover）からリバランスコスト累積を可視化します。実現リターンは
+          現スキーマに含まれないため理論 P/L は 0 ライン。コスト設定とリバランス頻度を変更すると
+          即座に再計算されます。
+        </p>
+      </header>
+
+      <div class="control-row">
+        <fieldset class="freq-fieldset">
+          <legend>リバランス頻度</legend>
+          <label><input type="radio" name="rebalance-freq" value="daily" checked> 日次</label>
+          <label><input type="radio" name="rebalance-freq" value="weekly"> 週次</label>
+          <label><input type="radio" name="rebalance-freq" value="monthly"> 月次</label>
+        </fieldset>
+      </div>
+
+      <div id="performance-chart" class="chart-area" role="img" aria-label="累積コスト P/L 折れ線グラフ"></div>
+
+      <p id="performance-note" class="note"></p>
+    </section>
+
+    <!-- 4. 過去シグナル履歴テーブル -->
+    <section id="history" class="card-section" aria-labelledby="history-title">
+      <header class="section-header">
+        <h2 id="history-title">過去シグナル履歴</h2>
+        <p class="section-meta">直近 30 営業日分。列ヘッダクリックで並び替え可能。</p>
+      </header>
+      <div class="table-wrap">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th data-sort-key="date" aria-sort="descending">日付 ▾</th>
+              <th data-sort-key="long">Long バスケット</th>
+              <th data-sort-key="short">Short バスケット</th>
+              <th data-sort-key="turnover">入替数</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody">
+            <tr><td colspan="4" class="empty">読み込み中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 5. コスト設定 -->
+    <section id="cost-settings" class="card-section" aria-labelledby="cost-settings-title">
+      <header class="section-header">
+        <h2 id="cost-settings-title">コスト設定</h2>
+        <p class="section-meta">
+          ブラウザの localStorage に保存されます（キーは <code>slc:</code> プレフィックス）。
+          数値はすべて % 表記（例: 0.05 = 0.05% = 5bps）。
+        </p>
+      </header>
+      <form id="cost-form" class="cost-form" autocomplete="off">
+        <div class="cost-field">
+          <label for="cost-fee">売買手数料（往復合計, %）</label>
+          <input type="number" id="cost-fee" step="0.001" min="0" value="0.05">
+        </div>
+        <div class="cost-field">
+          <label for="cost-spread">スプレッド（%）</label>
+          <input type="number" id="cost-spread" step="0.001" min="0" value="0.02">
+        </div>
+        <div class="cost-field">
+          <label for="cost-slippage">スリッページ（%）</label>
+          <input type="number" id="cost-slippage" step="0.001" min="0" value="0.03">
+        </div>
+        <div class="cost-field">
+          <label for="cost-borrow">貸株料（年率 %）</label>
+          <input type="number" id="cost-borrow" step="0.01" min="0" value="1.5">
+        </div>
+        <div class="cost-field">
+          <label for="cost-tax">税率（%）</label>
+          <input type="number" id="cost-tax" step="0.1" min="0" max="100" value="20.315">
+        </div>
+        <div class="cost-actions">
+          <button type="button" id="cost-reset" class="btn-secondary">既定値に戻す</button>
+        </div>
+      </form>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>
+        Source:
+        <a href="https://github.com/Ryoga-Tamai/sector-leadlag" target="_blank" rel="noopener">
+          Ryoga-Tamai/sector-leadlag
+        </a>
+        — Built with vanilla JavaScript &amp; Plotly.js 2.27.0
+      </p>
+    </div>
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>

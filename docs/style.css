@@ -1,0 +1,370 @@
+/* ============================================================
+ * Sector Lead-Lag Dashboard — style.css
+ * SECTION 10: ダークモード自動 / レスポンシブ / システムフォント
+ * ============================================================ */
+
+/* ---------- CSS 変数 (ライトモード既定) ---------- */
+:root {
+  --bg: #f7f8fa;
+  --bg-elevated: #ffffff;
+  --fg: #1a1a1a;
+  --fg-muted: #5a6270;
+  --fg-subtle: #8a909a;
+  --border: #e3e6eb;
+  --border-strong: #c8ccd4;
+  --accent: #3b82f6;
+  --accent-fg: #ffffff;
+  --long-color: #16a34a;   /* 緑 */
+  --long-bg: rgba(22, 163, 74, 0.08);
+  --short-color: #dc2626;  /* 赤 */
+  --short-bg: rgba(220, 38, 38, 0.08);
+  --warn-bg: #fff8e1;
+  --warn-fg: #6b5400;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+/* ---------- ダークモード ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --bg-elevated: #181b22;
+    --fg: #e8eaed;
+    --fg-muted: #a4abb8;
+    --fg-subtle: #6b7280;
+    --border: #2a2f38;
+    --border-strong: #3a414c;
+    --accent: #60a5fa;
+    --accent-fg: #0f1115;
+    --long-color: #4ade80;
+    --long-bg: rgba(74, 222, 128, 0.10);
+    --short-color: #f87171;
+    --short-bg: rgba(248, 113, 113, 0.10);
+    --warn-bg: rgba(255, 200, 0, 0.10);
+    --warn-fg: #ffd966;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* ---------- リセット & ベース ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  margin: 0 0 0.5em 0;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+code {
+  font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* ---------- レイアウト ---------- */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ---------- ヘッダー ---------- */
+.site-header {
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  padding: 28px 0 20px 0;
+}
+.site-title {
+  font-size: 26px;
+  letter-spacing: -0.01em;
+}
+.site-subtitle {
+  margin: 0 0 8px 0;
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+.last-updated {
+  margin: 4px 0 12px 0;
+  color: var(--fg-subtle);
+  font-size: 13px;
+}
+.disclaimer {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+/* ---------- セクション共通 ---------- */
+.card-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin: 20px 0;
+  box-shadow: var(--shadow);
+}
+
+.section-header { margin-bottom: 16px; }
+.section-header h2 {
+  font-size: 18px;
+}
+.section-meta {
+  margin: 4px 0 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+main.container { padding-top: 16px; padding-bottom: 32px; }
+
+/* ---------- 現在のシグナル ---------- */
+.signal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.basket-title {
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.basket-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.basket-badge-long  { background: var(--long-color);  color: #fff; }
+.basket-badge-short { background: var(--short-color); color: #fff; }
+
+.basket-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.basket-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.basket-long  .basket-item { background: var(--long-bg);  border-color: rgba(22, 163, 74, 0.25); }
+.basket-short .basket-item { background: var(--short-bg); border-color: rgba(220, 38, 38, 0.25); }
+
+.basket-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.basket-item-name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.basket-item-ticker {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: "SF Mono", Menlo, monospace;
+}
+.basket-item-score {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.basket-long  .basket-item-score { color: var(--long-color); }
+.basket-short .basket-item-score { color: var(--short-color); }
+
+/* ---------- チャート領域 ---------- */
+.chart-area {
+  width: 100%;
+  height: 360px;
+}
+
+/* ---------- 操作コントロール ---------- */
+.control-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.freq-fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px 8px 12px;
+  margin: 0;
+}
+.freq-fieldset legend {
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.freq-fieldset label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.note {
+  margin: 8px 0 0 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* ---------- 履歴テーブル ---------- */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+#history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+#history-table th,
+#history-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+#history-table th {
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+#history-table th:hover { color: var(--fg); }
+#history-table tbody tr:hover { background: var(--bg); }
+#history-table td.empty {
+  text-align: center;
+  color: var(--fg-subtle);
+  padding: 24px;
+}
+.ticker-list {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.ticker-list .long  { color: var(--long-color); }
+.ticker-list .short { color: var(--short-color); }
+
+/* ---------- コスト設定フォーム ---------- */
+.cost-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+}
+.cost-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cost-field label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.cost-field input {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 14px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  width: 100%;
+}
+.cost-field input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.cost-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: end;
+}
+.btn-secondary {
+  font-size: 13px;
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.btn-secondary:hover {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* ---------- フッター ---------- */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 16px 0;
+  color: var(--fg-subtle);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---------- レスポンシブ ---------- */
+@media (max-width: 768px) {
+  .container { padding: 0 16px; }
+  .site-title { font-size: 22px; }
+  .card-section { padding: 16px; margin: 16px 0; }
+  .signal-grid { grid-template-columns: 1fr; }
+  .chart-area { height: 300px; }
+  #history-table { font-size: 12px; }
+  #history-table th, #history-table td { padding: 6px 8px; }
+}
+
+@media (max-width: 480px) {
+  .basket-item { grid-template-columns: 1fr auto; gap: 8px; padding: 8px 10px; }
+  .basket-item-name { font-size: 13px; }
+}
