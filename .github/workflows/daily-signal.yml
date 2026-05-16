@@ -1,0 +1,87 @@
+name: Daily Signal
+
+# ---------------------------------------------------------------------------
+# 毎営業日朝（JST 06:00）に sector-leadlag のシグナルを生成し、
+# LINE で通知 → data/signals + docs/data.json を自動コミットするワークフロー。
+#
+# ┌────────────────┬─────────────────┬─────────────────────────────┐
+# │ JST 取引対象日  │ UTC cron 発火    │ 用途                          │
+# ├────────────────┼─────────────────┼─────────────────────────────┤
+# │ Mon            │ Sun 21:00 UTC   │ JP Mon 取引前の朝通知        │
+# │ Tue            │ Mon 21:00 UTC   │ JP Tue 取引前の朝通知        │
+# │ Wed            │ Tue 21:00 UTC   │ JP Wed 取引前の朝通知        │
+# │ Thu            │ Wed 21:00 UTC   │ JP Thu 取引前の朝通知        │
+# │ Fri            │ Thu 21:00 UTC   │ JP Fri 取引前の朝通知        │
+# └────────────────┴─────────────────┴─────────────────────────────┘
+#
+# 仕様書 sections_v3.md SECTION 9 の「平日のみ、21:00 UTC（= 翌日 06:00 JST）」を
+# JST 平日（JP 取引日）と解釈し、UTC では Sun-Thu に発火させる。
+# GitHub Actions の cron は最大 10–30 分遅延することがある点に留意。
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: '0 21 * * 0-4'   # UTC Sun-Thu 21:00 = JST Mon-Fri 06:00
+  workflow_dispatch:          # 手動実行（Actions タブの "Run workflow"）も許可
+
+# auto-commit のため。リポジトリ書き込み権限が必要。
+permissions:
+  contents: write
+
+# 同日の手動再実行 + cron 重複時に逐次実行（並列実行による push 衝突を回避）
+concurrency:
+  group: daily-signal
+  cancel-in-progress: false
+
+jobs:
+  daily-signal:
+    name: Generate daily signal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # fetch-depth=1（既定）で十分。auto-commit は HEAD への 1 コミット追加のみ。
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'              # pip キャッシュで毎日の起動を高速化
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pipeline (python -m src.main)
+        env:
+          # GitHub Secrets から環境変数として渡す。.env は CI では生成しない。
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID:              ${{ secrets.LINE_USER_ID }}
+          CAPITAL_JPY:               ${{ secrets.CAPITAL_JPY }}
+        run: python -m src.main
+
+      - name: Commit and push generated artifacts
+        # パイプラインが成功した場合のみ実行。失敗時は send_error_notification
+        # が LINE にトレースを送って main.py が re-raise → ここはスキップされる。
+        run: |
+          set -euo pipefail
+          git config --local user.name  "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # data/cache_prices.csv は毎回 byte 差分が出る運用ノウハウ(HANDOFF §6.3)。
+          # data/prior/C_full.npy も SECTION 7 では書き込まないが、念のため除外。
+          # auto-commit は data/signals/ と docs/ のみを対象にする。
+          git add data/signals/ docs/
+
+          if git diff --cached --quiet; then
+            echo "No changes in data/signals or docs/; skipping commit."
+            exit 0
+          fi
+
+          DATE_JST=$(TZ=Asia/Tokyo date +%Y-%m-%d)
+          git commit -m "Daily signal ${DATE_JST} [skip ci]"
+          git push origin "${GITHUB_REF_NAME}"
