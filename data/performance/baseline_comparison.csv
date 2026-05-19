@@ -1,0 +1,7 @@
+,Implementation,Implementation,Implementation,Implementation,Implementation,Paper Table 2,Paper Table 2,Paper Table 2,Paper Table 2
+,AR (%),RISK (%),R/R,MDD_c (%),MDD_s (%),AR (%),RISK (%),R/R,MDD (%)
+strategy,,,,,,,,,
+MOM,5.1828,10.8162,0.4792,25.4361,27.8434,5.6300,10.5900,0.5300,16.9700
+PCA_PLAIN,7.2834,10.0039,0.7281,21.3476,23.2013,6.2400,9.9400,0.6200,23.6500
+PCA_SUB,27.8914,10.5128,2.6531,10.6849,11.2047,23.7900,10.7000,2.2200,9.5800
+DOUBLE,14.6000,12.3260,1.1845,22.2010,24.4677,18.8600,11.1600,1.6900,12.1000
