@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from src.pca_engine import (
+    _normalize_eigenvector_signs,
     build_prior_subspace,
     build_target_correlation,
     compute_lead_lag_signal,
@@ -162,3 +163,86 @@ def test_lead_lag_signal_shape():
     z_jp_pred = compute_lead_lag_signal(z_us_t, V_U, V_J)
 
     assert z_jp_pred.shape == (N_JP,), f"Signal shape mismatch: {z_jp_pred.shape}"
+
+
+# ---------------------------------------------------------------------------
+# 9. Sign normalisation is deterministic for the same input
+# ---------------------------------------------------------------------------
+
+
+def test_extract_eigenvectors_sign_deterministic():
+    """Same input → same eigenvector signs every call.
+
+    Also confirms the canonical-sign rule: the entry with the largest absolute
+    value in each column is non-negative after normalisation.
+    """
+    rng = np.random.default_rng(2024)
+    C_reg = _make_spd_matrix(N, rng)
+
+    # Repeated calls must yield bit-identical output.
+    V_U_a, V_J_a = extract_top_eigenvectors(C_reg, K, N_US)
+    V_U_b, V_J_b = extract_top_eigenvectors(C_reg, K, N_US)
+    assert np.array_equal(V_U_a, V_U_b), "V_U is not deterministic across calls"
+    assert np.array_equal(V_J_a, V_J_b), "V_J is not deterministic across calls"
+
+    # Sign-flipped raw eigenvectors must converge to the same canonical form.
+    V_top = np.vstack([V_U_a, V_J_a])
+    flipped = V_top * np.array([1.0, -1.0, 1.0])  # arbitrary column-wise flip
+    V_canonical = _normalize_eigenvector_signs(flipped)
+    assert np.allclose(V_canonical, V_top, atol=1e-12), (
+        "Sign normaliser is not idempotent on a sign-flipped input"
+    )
+
+    # The pivot entry (max-|·| per column) must be non-negative.
+    pivot_idx = np.argmax(np.abs(V_top), axis=0)
+    pivots = V_top[pivot_idx, np.arange(K)]
+    assert np.all(pivots >= 0.0), f"Pivot entries are not all non-negative: {pivots}"
+
+
+# ---------------------------------------------------------------------------
+# 10. Strategy signal is invariant to the sign-fix step
+# ---------------------------------------------------------------------------
+
+
+def test_lead_lag_signal_invariant_to_sign_fix():
+    """compute_lead_lag_signal output is identical before and after sign-fix.
+
+    Mathematical justification:
+        B = V_J · V_U^T. Right-multiplying both blocks by Q = diag(±1) gives
+        B' = V_J · Q · Q^T · V_U^T = V_J · V_U^T = B, since Q · Q^T = I.
+    """
+    rng = np.random.default_rng(123)
+    C_reg = _make_spd_matrix(N, rng)
+    z_us_t = rng.standard_normal(N_US)
+
+    # Sign-fixed path (current production behaviour).
+    V_U_fixed, V_J_fixed = extract_top_eigenvectors(C_reg, K, N_US)
+    signal_jp_fixed = compute_lead_lag_signal(z_us_t, V_U_fixed, V_J_fixed)
+
+    # Raw-eigh path: replicate the old, sign-arbitrary extraction in-line.
+    eigenvalues, eigenvectors = np.linalg.eigh(C_reg)
+    idx = np.argsort(eigenvalues)[::-1]
+    V_top_raw = eigenvectors[:, idx][:, :K]
+    V_U_raw = V_top_raw[:N_US, :]
+    V_J_raw = V_top_raw[N_US:, :]
+    signal_jp_raw = compute_lead_lag_signal(z_us_t, V_U_raw, V_J_raw)
+
+    # Signals must agree to floating-point precision.
+    assert np.allclose(signal_jp_fixed, signal_jp_raw, atol=1e-12), (
+        "signal_jp changed after sign-fix; the sign-flip invariance is broken"
+    )
+
+    # Additional sanity: arbitrary manual column flips should also leave the
+    # signal unchanged.
+    for flip in [
+        np.array([+1.0, +1.0, +1.0]),
+        np.array([-1.0, +1.0, +1.0]),
+        np.array([+1.0, -1.0, +1.0]),
+        np.array([-1.0, -1.0, -1.0]),
+    ]:
+        signal_flipped = compute_lead_lag_signal(
+            z_us_t, V_U_fixed * flip, V_J_fixed * flip
+        )
+        assert np.allclose(signal_flipped, signal_jp_fixed, atol=1e-12), (
+            f"Signal changed under column flip {flip.tolist()}"
+        )

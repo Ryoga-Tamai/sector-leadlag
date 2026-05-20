@@ -109,12 +109,49 @@ def compute_regularized_correlation(
     return (1.0 - lam) * C_t + lam * C_0
 
 
+def _normalize_eigenvector_signs(V: np.ndarray) -> np.ndarray:
+    """Deterministically fix the sign of each eigenvector column.
+
+    np.linalg.eigh returns eigenvectors with arbitrary sign. To make downstream
+    artefacts (e.g. factor_scores = V_U^T · z_us) reproducible run-to-run, we
+    pick a canonical sign per column: the entry with the largest absolute value
+    in the column is forced to be positive (if it is negative, the entire
+    column is multiplied by −1).
+
+    Args:
+        V: Eigenvector matrix, shape (N, K). Modified out-of-place.
+
+    Returns:
+        V_signed: Same shape as V, with each column sign-normalised.
+    """
+    # argmax over absolute value picks the dominant entry per column
+    pivot_idx = np.argmax(np.abs(V), axis=0)
+    pivot_vals = V[pivot_idx, np.arange(V.shape[1])]
+    # signs ∈ {+1, -1}; np.sign(0) == 0, but a pivot value of 0 means the whole
+    # column is zero and the sign choice is irrelevant — guard with `or 1`.
+    signs = np.where(pivot_vals < 0, -1.0, 1.0)
+    return V * signs
+
+
 def extract_top_eigenvectors(
     C_reg: np.ndarray,
     K: int,
     n_us: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Decompose C_reg and return the top-K eigenvectors split by country (eqs. 14–16).
+
+    The eigenvector signs are deterministically fixed via
+    `_normalize_eigenvector_signs` *before* splitting into US/JP blocks, so the
+    same sign flip is applied consistently to V_U and V_J for each factor.
+
+    Strategy-return invariance under sign flips:
+        The lead-lag predictor is B = V_J · V_U^T (see `compute_lead_lag_signal`).
+        Any per-column sign flip can be written as right-multiplication by a
+        diagonal matrix Q = diag(±1) with Q · Q^T = I. Then
+            B' = (V_J · Q) · (V_U · Q)^T = V_J · Q · Q^T · V_U^T = V_J · V_U^T = B,
+        so signal_jp is unchanged. The sign fix only affects directly-projected
+        quantities such as factor_scores = V_U^T · z_us, which the dashboard
+        renders for the user.
 
     Args:
         C_reg: Regularised correlation matrix, shape (N, N).
@@ -133,6 +170,9 @@ def extract_top_eigenvectors(
     eigenvectors = eigenvectors[:, idx]
 
     V_top = eigenvectors[:, :K]
+    # Apply deterministic sign normalisation to the full top-K block first so
+    # that the same per-column sign is shared by the US and JP halves.
+    V_top = _normalize_eigenvector_signs(V_top)
     V_U = V_top[:n_us, :]
     V_J = V_top[n_us:, :]
     return V_U, V_J
