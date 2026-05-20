@@ -5,23 +5,31 @@
  * docs/data.json スキーマ (SECTION 7 の src/main.py が出力):
  *   {
  *     "last_updated": "ISO 8601 (JST)",
+ *     "basket_size":   5,                          // 任意。1銘柄あたり想定元本比率 = 1/basket_size
  *     "current_signal": {
  *       "date": "YYYY-MM-DD",
- *       "long_basket":  ["1618.T", ...],          // 5 銘柄, スコア降順
- *       "short_basket": ["1633.T", ...],          // 5 銘柄, スコア昇順
+ *       "long_basket":  ["1618.T", ...],          // basket_size 銘柄, スコア降順
+ *       "short_basket": ["1633.T", ...],          // basket_size 銘柄, スコア昇順
  *       "factor_scores": [PC1, PC2, PC3],
  *       "all_scores":    { "1617.T": float, ... } // 17 JP tickers
  *     },
  *     "history": [
- *       { "date": "YYYY-MM-DD", "long": [...5...], "short": [...5...] },
+ *       { "date": "YYYY-MM-DD",
+ *         "long":  [...basket_size...],
+ *         "short": [...basket_size...],
+ *         "realized_return": 0.0123                // 任意。t+1 OC の long-short 実現リターン(小数)。
+ *                                                  // 未確定（t+1 未観測）の場合は null。
+ *       },
  *       ...                                          // 最大 100 営業日
  *     ]
  *   }
  *
- * 設計判断: history は実現リターンを持たないため、累積パフォーマンスは
- * 「銘柄入替 turnover に基づくリバランスコスト累積」として描画する。
- * 理論 P/L は 0 ラインのまま、コスト込み P/L = -累積コスト。
- * (HANDOFF.md §5 / 仕様書 sections_v3.md SECTION 10 の制約に基づく)
+ * 設計判断: 累積パフォーマンスは2本のラインで描画する。
+ *   (1) コスト控除前 P/L = Σ realized_return (小数 → %換算、null はスキップ＝加算しない)
+ *   (2) コスト控除後 P/L = (1) − 累積リバランスコスト
+ * data.json 旧スキーマで realized_return が無い場合、(1) は 0 のフラットラインに退化する。
+ * basket_size が無い場合は 1銘柄=元本10%（旧定数 0.10）にフォールバック。
+ * (HANDOFF.md §5 / 仕様書 sections_v3.md SECTION 10 / 後継セクションの制約に基づく)
  * ===================================================================== */
 
 (function () {
@@ -332,17 +340,29 @@
   }
 
   /**
+   * 1銘柄あたりの想定元本比率を返す。
+   *   data.json に basket_size があれば 1/basket_size、無ければ旧仕様の 0.10。
+   * フォールバック 0.10 は basket_size=10 相当 (= 旧コードのハードコード値)。
+   */
+  function perNameNotionalFraction(basketSize) {
+    return (typeof basketSize === "number" && basketSize > 0)
+      ? 1 / basketSize
+      : 0.10;
+  }
+
+  /**
    * リバランス頻度別に、累積コスト系列を組み立てる。
-   * - 片側の入替 1 銘柄 = (1/5) × 50% グロス = 10% の取引相当 (両側合計のうち片側)
-   *   = 取引コスト pct = 入替数 × 10% × (fee + spread + slippage)% / 100
+   * - 1銘柄入替の取引相当 = 入替数 × (1/basket_size) [= perNameNotionalFraction]
+   *   ※ basket_size が無い場合は 0.10 (= 1銘柄=10% notional の旧定数) にフォールバック。
    * - 貸株料は保有日数比例: 各リバランス期間の経過営業日数 × (borrow_annual / 252) × 50% (ショート側グロス)
    *
-   * @param series resampled series
-   * @param costs  { fee, spread, slippage, borrow, tax } in percent
-   * @param freq   "daily" | "weekly" | "monthly"
-   * @returns Array<{date: string, cumCostPct: number}>
+   * @param series      resampled series
+   * @param costs       { fee, spread, slippage, borrow, tax } in percent
+   * @param freq        "daily" | "weekly" | "monthly"
+   * @param basketSize  data.basket_size (任意; 未定義の場合は perNameNotionalFraction が 0.10 にフォールバック)
+   * @returns Array<{date: string, cumCostPct: number, tradeCostPct: number, borrowCostPct: number}>
    */
-  function buildCostSeries(series, costs, freq) {
+  function buildCostSeries(series, costs, freq, basketSize) {
     if (!series.length) return [];
     const tradingDaysBetween = (a, b) => {
       // 単純近似: カレンダー差 × 5/7
@@ -352,12 +372,13 @@
     };
 
     const txCostPct = costs.fee + costs.spread + costs.slippage; // % per 100% notional traded
+    const perName = perNameNotionalFraction(basketSize);
     const out = [];
     let cumCost = 0;
     let prevDate = null;
     for (const row of series) {
-      // 取引コスト: 入替 1 銘柄 = 10% の取引相当 (両側合計の片側)
-      const tradedFraction = row.turnover * 0.10; // 10% of notional per swap
+      // 取引コスト: 入替 1 銘柄 = perName 相当の notional
+      const tradedFraction = row.turnover * perName;
       const tradeCostPct = tradedFraction * txCostPct;
       // 貸株料: 期間の営業日数 × (borrow/252) × 50% グロス
       let borrowDays;
@@ -375,21 +396,74 @@
   }
 
   // ------------------------------------------------------------
-  // 描画: 累積コストチャート
+  // 計算: 累積実現 P/L (history.realized_return の単純和)
+  // ------------------------------------------------------------
+
+  /**
+   * history を日付昇順に整列し、各営業日について realized_return の累積和（%表示）を返す。
+   * realized_return が null/undefined/非数の場合はその日の加算をスキップ（累積値は前日を踏襲）。
+   *
+   * @returns Array<{date: string, cumReturnPct: number, hadRealized: boolean}>
+   *   hadRealized は「その日までに少なくとも 1 つ realized_return が観測されたか」。
+   *   全期間 false の場合、cumReturnPct はすべて 0（旧「理論 P/L = 0 ライン」相当の挙動）。
+   */
+  function buildCumulativeRealizedPL(history) {
+    if (!Array.isArray(history) || !history.length) return [];
+    const sorted = history.slice().sort((a, b) => a.date.localeCompare(b.date));
+    const out = [];
+    let cum = 0;
+    let hadAny = false;
+    for (const row of sorted) {
+      const r = row.realized_return;
+      if (r != null && Number.isFinite(r)) {
+        cum += Number(r) * 100; // 小数 → %
+        hadAny = true;
+      }
+      out.push({ date: row.date, cumReturnPct: cum, hadRealized: hadAny });
+    }
+    return out;
+  }
+
+  /**
+   * costSeries（リサンプリング済み、稀な日付列）を P/L 系列の日付列に
+   * 前方フィル（step-function）で揃える。各 plDate について、それ以下の
+   * 最新 costSeries エントリの cumCostPct を返す。
+   *
+   * @param costSeries Array<{date, cumCostPct}>（日付昇順）
+   * @param plDates    string[]（日付昇順）
+   * @returns number[]（plDates と同じ長さ。先頭で対応するコストが無い場合は 0）
+   */
+  function alignCostToDates(costSeries, plDates) {
+    const result = new Array(plDates.length).fill(0);
+    if (!costSeries.length) return result;
+    let i = 0;
+    let lastCost = 0;
+    for (let j = 0; j < plDates.length; j++) {
+      while (i < costSeries.length && costSeries[i].date <= plDates[j]) {
+        lastCost = costSeries[i].cumCostPct;
+        i++;
+      }
+      result[j] = lastCost;
+    }
+    return result;
+  }
+
+  // ------------------------------------------------------------
+  // 描画: 累積パフォーマンス（コスト控除前後）
   // ------------------------------------------------------------
 
   function renderPerformance(data, costs, freq) {
     const history = data.history || [];
+    const basketSize = data.basket_size;
     const turnoverRaw = computeTurnoverSeries(history);
     const resampled  = resampleByFrequency(turnoverRaw, freq);
-    const costSeries = buildCostSeries(resampled, costs, freq);
+    const costSeries = buildCostSeries(resampled, costs, freq, basketSize);
+    const plSeries   = buildCumulativeRealizedPL(history);
 
     const theme = getPlotlyTheme();
-    const dates = costSeries.map((r) => r.date);
-    const cumCost = costSeries.map((r) => r.cumCostPct);
-
     const noteEl = $("#performance-note");
-    if (!costSeries.length) {
+
+    if (!history.length) {
       Plotly.purge("performance-chart");
       $("#performance-chart").innerHTML =
         '<p style="padding:48px 16px;text-align:center;color:var(--fg-subtle);">' +
@@ -398,33 +472,51 @@
       noteEl.textContent = "";
       return;
     }
-    if (costSeries.length === 1) {
+
+    // x 軸は history 全営業日（plSeries の日付）に統一し、コスト系列は前方フィルで揃える。
+    const dates = plSeries.map((r) => r.date);
+    const beforeCostY = plSeries.map((r) => r.cumReturnPct);
+    const alignedCost = alignCostToDates(costSeries, dates);
+    const afterCostY  = beforeCostY.map((bc, i) => bc - alignedCost[i]);
+
+    const hasRealized = plSeries.length > 0 && plSeries[plSeries.length - 1].hadRealized;
+    const lastCumCost = alignedCost.length ? alignedCost[alignedCost.length - 1] : 0;
+    const lastBefore  = beforeCostY.length ? beforeCostY[beforeCostY.length - 1] : 0;
+    const lastAfter   = afterCostY.length  ? afterCostY[afterCostY.length - 1]  : 0;
+
+    if (dates.length === 1) {
       noteEl.textContent =
         "履歴が 1 営業日分のみです。turnover 計算は前日比のため、複数日蓄積されてから本格的な可視化が可能になります。";
+    } else if (!hasRealized) {
+      noteEl.textContent =
+        `${dates.length} データポイント / ${freq} リバランス想定。` +
+        `realized_return 未蓄積のため控除前 P/L は 0 ライン、控除後 P/L = -累積コスト (${lastCumCost.toFixed(3)}%)。`;
     } else {
       noteEl.textContent =
-        `${costSeries.length} データポイント / ${freq} リバランス想定。コスト累積は ${cumCost[cumCost.length - 1].toFixed(3)}% です。`;
+        `${dates.length} データポイント / ${freq} リバランス想定。` +
+        `控除前 P/L = ${lastBefore.toFixed(3)}% / 累積コスト = ${lastCumCost.toFixed(3)}% / 控除後 P/L = ${lastAfter.toFixed(3)}%。`;
     }
 
-    const traceTheoretical = {
-      type: "scatter",
-      mode: "lines",
-      name: "理論 P/L (0 ライン)",
-      x: dates,
-      y: dates.map(() => 0),
-      line: { color: "#9ca3af", dash: "dash", width: 1.5 },
-      hovertemplate: "%{x}<br>理論 P/L: 0.00%<extra></extra>",
-    };
-    const traceCost = {
+    const traceBefore = {
       type: "scatter",
       mode: "lines+markers",
-      name: "コスト込み P/L (= 累積コスト × -1)",
+      name: "コスト控除前 P/L (累積実現リターン)",
       x: dates,
-      y: cumCost.map((v) => -v),
+      y: beforeCostY,
+      line: { color: "#3b82f6", width: 2 },
+      marker: { size: 5 },
+      hovertemplate: "%{x}<br>控除前 P/L: %{y:.3f}%<extra></extra>",
+    };
+    const traceAfter = {
+      type: "scatter",
+      mode: "lines+markers",
+      name: "コスト控除後 P/L (= 控除前 − 累積コスト)",
+      x: dates,
+      y: afterCostY,
       line: { color: "#dc2626", width: 2 },
       marker: { size: 5 },
-      hovertemplate: "%{x}<br>コスト累積: %{customdata:.3f}%<br>P/L: %{y:.3f}%<extra></extra>",
-      customdata: cumCost,
+      hovertemplate: "%{x}<br>累積コスト: %{customdata:.3f}%<br>控除後 P/L: %{y:.3f}%<extra></extra>",
+      customdata: alignedCost,
     };
 
     const layout = Object.assign({}, theme, {
@@ -439,7 +531,7 @@
       hovermode: "x unified",
     });
 
-    Plotly.react("performance-chart", [traceTheoretical, traceCost], layout, {
+    Plotly.react("performance-chart", [traceBefore, traceAfter], layout, {
       displayModeBar: false,
       responsive: true,
     });

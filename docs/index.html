@@ -61,14 +61,16 @@
       <div id="factor-scores-chart" class="chart-area" role="img" aria-label="ファクタースコア棒グラフ"></div>
     </section>
 
-    <!-- 3. 累積パフォーマンス（コスト効果） -->
+    <!-- 3. 累積パフォーマンス（コスト控除前後） -->
     <section id="performance" class="card-section" aria-labelledby="performance-title">
       <header class="section-header">
-        <h2 id="performance-title">累積コスト効果（リバランス由来）</h2>
+        <h2 id="performance-title">累積 P/L（コスト控除前後）</h2>
         <p class="section-meta">
-          history の銘柄入替（turnover）からリバランスコスト累積を可視化します。実現リターンは
-          現スキーマに含まれないため理論 P/L は 0 ライン。コスト設定とリバランス頻度を変更すると
-          即座に再計算されます。
+          history の <code>realized_return</code> を時系列に累積した「コスト控除前 P/L」と、
+          リバランスコスト累積を差し引いた「コスト控除後 P/L」を同時表示します。
+          1 銘柄あたりの想定元本比率は <code>data.json</code> の <code>basket_size</code>
+          から <code>1 / basket_size</code> として算出（未定義時は 0.10 にフォールバック）。
+          コスト設定とリバランス頻度を変更すると即座に再計算されます。
         </p>
       </header>
 
@@ -81,7 +83,7 @@
         </fieldset>
       </div>
 
-      <div id="performance-chart" class="chart-area" role="img" aria-label="累積コスト P/L 折れ線グラフ"></div>
+      <div id="performance-chart" class="chart-area" role="img" aria-label="累積 P/L 折れ線グラフ（コスト控除前後）"></div>
 
       <p id="performance-note" class="note"></p>
     </section>
