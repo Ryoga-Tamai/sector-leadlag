@@ -232,7 +232,11 @@ class TestDocsDataJson:
         _write_docs_data_json(sig, signals_dir, out)
 
         payload = json.loads(out.read_text())
-        assert set(payload.keys()) == {"last_updated", "current_signal", "history"}
+        # New schema: basket_size sits alongside the legacy top-level keys.
+        assert set(payload.keys()) == {
+            "last_updated", "basket_size", "current_signal", "history",
+        }
+        assert payload["basket_size"] == 5
         cur = payload["current_signal"]
         assert cur["date"] == "2026-05-15"
         assert len(cur["long_basket"]) == 5
@@ -240,6 +244,195 @@ class TestDocsDataJson:
         assert len(cur["factor_scores"]) == 3
         assert set(cur["all_scores"].keys()) == set(JP_TICKERS)
         assert len(payload["history"]) == 1
+        # Every history entry must carry realized_return; here oc_returns
+        # is not supplied so the field is null.
+        assert payload["history"][0]["realized_return"] is None
+
+
+# ---------------------------------------------------------------------------
+# realized_return — backward-looking P/L attribution
+# ---------------------------------------------------------------------------
+
+def _make_oc_returns(
+    dates: list[pd.Timestamp],
+    long_basket: list[str],
+    short_basket: list[str],
+    *,
+    long_value: float,
+    short_value: float,
+    other_value: float = 0.0,
+) -> pd.DataFrame:
+    """Build a deterministic JP OC returns frame for realized_return tests.
+
+    Every row gets ``long_value`` for the long-basket tickers,
+    ``short_value`` for the short-basket tickers and ``other_value``
+    elsewhere — so the expected equal-weighted long-short realized
+    return is simply ``long_value - short_value`` per row.
+    """
+    data = np.full((len(dates), len(JP_TICKERS)), other_value, dtype=float)
+    df = pd.DataFrame(data, index=pd.DatetimeIndex(dates), columns=JP_TICKERS)
+    df.loc[:, long_basket] = long_value
+    df.loc[:, short_basket] = short_value
+    return df
+
+
+class TestRealizedReturn:
+    """Realized strategy return must use t+1 OC, never t or earlier."""
+
+    def test_history_entries_include_realized_return_key(self, tmp_path: Path):
+        signals_dir = tmp_path / "signals"
+        signals_dir.mkdir()
+        sig = _dummy_signal_result(pd.Timestamp("2026-05-15"))
+        _write_signal_csv(
+            sig, _dummy_lot_result(sig), signals_dir / "2026-05-15.csv"
+        )
+
+        history = _build_history(signals_dir, limit=10)
+
+        assert len(history) == 1
+        # Schema: every entry carries the new key, even without oc_returns.
+        assert set(history[0].keys()) == {
+            "date", "long", "short", "realized_return",
+        }
+        assert history[0]["realized_return"] is None
+
+    def test_realized_return_uses_t_plus_one_oc(self, tmp_path: Path):
+        """For date t, realized_return must equal long_avg - short_avg on t+1."""
+        signals_dir = tmp_path / "signals"
+        signals_dir.mkdir()
+        sig_t = _dummy_signal_result(pd.Timestamp("2026-05-14"))
+        sig_t1 = _dummy_signal_result(pd.Timestamp("2026-05-15"))
+        _write_signal_csv(
+            sig_t, _dummy_lot_result(sig_t), signals_dir / "2026-05-14.csv"
+        )
+        _write_signal_csv(
+            sig_t1, _dummy_lot_result(sig_t1), signals_dir / "2026-05-15.csv"
+        )
+
+        # OC returns crafted so that ON t+1 = 2026-05-15, every long
+        # ticker (of the t basket) earns +1% and every short ticker
+        # earns -0.5%, while all other tickers are flat.  Expected
+        # realized strategy return for t = 2026-05-14 is therefore
+        # 0.01 - (-0.005) = 0.015 = 1.5%.
+        oc = _make_oc_returns(
+            dates=[pd.Timestamp("2026-05-14"), pd.Timestamp("2026-05-15")],
+            long_basket=sig_t["long_basket"],
+            short_basket=sig_t["short_basket"],
+            long_value=0.01,
+            short_value=-0.005,
+        )
+
+        history = _build_history(signals_dir, limit=10, oc_returns=oc)
+
+        # Two entries: t (with realized_return) and t+1 (no t+2 → None).
+        assert len(history) == 2
+        entry_t, entry_t1 = history[0], history[1]
+        assert entry_t["date"] == "2026-05-14"
+        assert entry_t1["date"] == "2026-05-15"
+
+        assert entry_t["realized_return"] == pytest.approx(0.015)
+        # The most recent entry has no t+1 available → must stay null.
+        assert entry_t1["realized_return"] is None
+
+    def test_realized_return_is_null_for_latest_signal(self, tmp_path: Path):
+        """The current signal day has no t+1 OC yet — must be null."""
+        signals_dir = tmp_path / "signals"
+        signals_dir.mkdir()
+        sig = _dummy_signal_result(pd.Timestamp("2026-05-15"))
+        _write_signal_csv(
+            sig, _dummy_lot_result(sig), signals_dir / "2026-05-15.csv"
+        )
+
+        # OC frame ends *on* the signal date — no t+1 row.
+        oc = _make_oc_returns(
+            dates=[pd.Timestamp("2026-05-14"), pd.Timestamp("2026-05-15")],
+            long_basket=sig["long_basket"],
+            short_basket=sig["short_basket"],
+            long_value=0.02,
+            short_value=-0.01,
+        )
+
+        history = _build_history(signals_dir, limit=10, oc_returns=oc)
+
+        assert len(history) == 1
+        assert history[0]["realized_return"] is None
+
+    def test_realized_return_uses_only_t_plus_one_row(self, tmp_path: Path):
+        """Realized return must not contaminate t with OC from t or earlier.
+
+        Concretely: if t-1's OC and t's OC are both extreme but t+1's OC
+        is zero on every ticker, the realised return at date t must be
+        exactly zero — i.e. only the t+1 row is consulted.
+        """
+        signals_dir = tmp_path / "signals"
+        signals_dir.mkdir()
+        sig_t_minus_1 = _dummy_signal_result(pd.Timestamp("2026-05-13"))
+        sig_t = _dummy_signal_result(pd.Timestamp("2026-05-14"))
+        sig_t_plus_1 = _dummy_signal_result(pd.Timestamp("2026-05-15"))
+        for s, day in [
+            (sig_t_minus_1, "2026-05-13"),
+            (sig_t, "2026-05-14"),
+            (sig_t_plus_1, "2026-05-15"),
+        ]:
+            _write_signal_csv(s, _dummy_lot_result(s), signals_dir / f"{day}.csv")
+
+        # OC values that would *break* the test if any other row leaked
+        # into the realised-return calculation for date t.
+        dates = [
+            pd.Timestamp("2026-05-13"),
+            pd.Timestamp("2026-05-14"),
+            pd.Timestamp("2026-05-15"),
+        ]
+        oc = pd.DataFrame(
+            0.0, index=pd.DatetimeIndex(dates), columns=JP_TICKERS
+        )
+        # t-1 row: large positive on long, large negative on short.
+        oc.loc[dates[0], sig_t["long_basket"]] = 99.0
+        oc.loc[dates[0], sig_t["short_basket"]] = -99.0
+        # t row: large negative on long, large positive on short.
+        oc.loc[dates[1], sig_t["long_basket"]] = -99.0
+        oc.loc[dates[1], sig_t["short_basket"]] = 99.0
+        # t+1 row: all zeros (the row that *should* be consulted).
+
+        history = _build_history(signals_dir, limit=10, oc_returns=oc)
+
+        entry_t = next(h for h in history if h["date"] == "2026-05-14")
+        assert entry_t["realized_return"] == pytest.approx(0.0)
+
+    def test_docs_payload_carries_basket_size_and_realized_history(
+        self, tmp_path: Path
+    ):
+        signals_dir = tmp_path / "signals"
+        signals_dir.mkdir()
+        sig_t = _dummy_signal_result(pd.Timestamp("2026-05-14"))
+        sig_t1 = _dummy_signal_result(pd.Timestamp("2026-05-15"))
+        _write_signal_csv(
+            sig_t, _dummy_lot_result(sig_t), signals_dir / "2026-05-14.csv"
+        )
+        _write_signal_csv(
+            sig_t1, _dummy_lot_result(sig_t1), signals_dir / "2026-05-15.csv"
+        )
+        oc = _make_oc_returns(
+            dates=[pd.Timestamp("2026-05-14"), pd.Timestamp("2026-05-15")],
+            long_basket=sig_t["long_basket"],
+            short_basket=sig_t["short_basket"],
+            long_value=0.01,
+            short_value=-0.005,
+        )
+
+        out = tmp_path / "data.json"
+        _write_docs_data_json(
+            sig_t1, signals_dir, out, oc_returns=oc, basket_size=5,
+        )
+
+        payload = json.loads(out.read_text())
+        assert payload["basket_size"] == 5
+        # First history entry (t) has a real number; second (latest) is null.
+        h0, h1 = payload["history"][0], payload["history"][1]
+        assert h0["date"] == "2026-05-14"
+        assert h0["realized_return"] == pytest.approx(0.015)
+        assert h1["date"] == "2026-05-15"
+        assert h1["realized_return"] is None
 
 
 # ---------------------------------------------------------------------------
