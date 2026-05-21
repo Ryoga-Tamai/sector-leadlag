@@ -61,6 +61,7 @@ from src.line_notifier import (
 )
 from src.lot_calculator import calculate_lots, fetch_latest_prices
 from src.pca_engine import build_prior_subspace, build_target_correlation
+from src.returns import compute_oc_returns
 from src.signal_generator import (
     SignalConfig,
     generate_signal,
@@ -195,13 +196,110 @@ def _write_signal_csv(
             )
 
 
-def _build_history(signals_dir: Path, limit: int) -> list[dict]:
+def _realized_return_for_date(
+    date_str: str,
+    long_basket: list[str],
+    short_basket: list[str],
+    oc_returns: Optional[pd.DataFrame],
+) -> Optional[float]:
+    """Realized equal-weighted long-short JP OC return on ``t+1``.
+
+    Look-ahead safety
+    -----------------
+    This is a strictly *backward-looking attribution* helper, called only
+    when populating history entries for past signals — it reads the OC
+    return on the business day *after* ``t`` (i.e., ``t+1``) precisely so
+    that we can record what the strategy *actually* earned.  It is never
+    fed into :func:`src.signal_generator.generate_signal`, which by
+    construction sees no data dated after ``t``.
+
+    For the current signal date ``t = close.index[-1]`` there is no
+    ``t+1`` row in ``oc_returns``, so this function returns ``None`` —
+    the realised return is intentionally left "未確定" until the next
+    pipeline run, when ``t+1`` will have closed.
+
+    Parameters
+    ----------
+    date_str
+        Signal date ``t`` formatted as ``YYYY-MM-DD``.
+    long_basket, short_basket
+        JP tickers held long (+1/Q each) and short (-1/Q each) at the
+        close of ``t``.
+    oc_returns
+        JP Open-to-Close returns indexed by business days with columns
+        in ``JP_TICKERS`` order (see :func:`src.returns.compute_oc_returns`).
+        ``None`` disables the computation and the function returns
+        ``None``.
+
+    Returns
+    -------
+    float | None
+        ``mean(oc[t+1, long]) - mean(oc[t+1, short])`` when ``t+1`` is
+        available; ``None`` otherwise (``t+1`` not yet observed,
+        unparseable date, missing ticker, or non-finite result).
+    """
+    if oc_returns is None or oc_returns.empty:
+        return None
+    if not long_basket or not short_basket:
+        return None
+    try:
+        t_ts = pd.Timestamp(date_str)
+    except (ValueError, TypeError):
+        return None
+    if t_ts not in oc_returns.index:
+        return None
+    t_loc = oc_returns.index.get_loc(t_ts)
+    if not isinstance(t_loc, (int, np.integer)):
+        # Duplicate / non-unique date — refuse to guess.
+        return None
+    if int(t_loc) + 1 >= len(oc_returns.index):
+        # t+1 has not yet been observed (most commonly: t is today's
+        # signal date). Must remain null.
+        return None
+    if not (set(long_basket) | set(short_basket)).issubset(
+        set(oc_returns.columns)
+    ):
+        return None
+    next_row = oc_returns.iloc[int(t_loc) + 1]
+    long_avg = float(np.mean([float(next_row[tk]) for tk in long_basket]))
+    short_avg = float(np.mean([float(next_row[tk]) for tk in short_basket]))
+    if not (np.isfinite(long_avg) and np.isfinite(short_avg)):
+        return None
+    return long_avg - short_avg
+
+
+def _build_history(
+    signals_dir: Path,
+    limit: int,
+    oc_returns: Optional[pd.DataFrame] = None,
+) -> list[dict]:
     """Aggregate the most recent ``limit`` per-day CSVs into a list.
 
-    Each list element is ``{"date", "long", "short"}``.  Files that
-    fail to parse are skipped silently so a single corrupt CSV cannot
-    poison the dashboard.  Filenames sort chronologically because they
-    are ``YYYY-MM-DD.csv``.
+    Each list element is ``{"date", "long", "short", "realized_return"}``.
+    Files that fail to parse are skipped silently so a single corrupt
+    CSV cannot poison the dashboard.  Filenames sort chronologically
+    because they are ``YYYY-MM-DD.csv``.
+
+    Parameters
+    ----------
+    signals_dir
+        Directory containing per-day CSVs produced by
+        :func:`_write_signal_csv`.
+    limit
+        Keep at most this many of the most recent files.
+    oc_returns
+        Optional JP OC returns frame (indexed by business days, columns
+        in ``JP_TICKERS`` order).  When provided, each history entry's
+        ``realized_return`` is filled with the equal-weighted long-short
+        strategy return on the next business day (``t+1``); see
+        :func:`_realized_return_for_date`.  When ``None`` (or when
+        ``t+1`` is not yet available), ``realized_return`` is ``None``.
+
+    Look-ahead safety
+    -----------------
+    ``realized_return`` is computed strictly from price data on ``t+1``
+    and is used only for ex-post P/L attribution — it is never consumed
+    by :func:`src.signal_generator.generate_signal`.
     """
     if not signals_dir.exists():
         return []
@@ -217,7 +315,17 @@ def _build_history(signals_dir: Path, limit: int) -> list[dict]:
         date_str = str(df.iloc[0]["date"])
         longs = df.loc[df["position"] == "long", "ticker"].tolist()
         shorts = df.loc[df["position"] == "short", "ticker"].tolist()
-        history.append({"date": date_str, "long": longs, "short": shorts})
+        realized = _realized_return_for_date(
+            date_str, longs, shorts, oc_returns
+        )
+        history.append(
+            {
+                "date": date_str,
+                "long": longs,
+                "short": shorts,
+                "realized_return": realized,
+            }
+        )
     return history
 
 
@@ -225,8 +333,31 @@ def _write_docs_data_json(
     signal_result: dict,
     signals_dir: Path,
     out_path: Path,
+    oc_returns: Optional[pd.DataFrame] = None,
+    basket_size: Optional[int] = None,
 ) -> None:
-    """Persist the GitHub Pages payload (current signal + history)."""
+    """Persist the GitHub Pages payload (current signal + history).
+
+    In addition to the legacy ``current_signal`` and ``history`` blocks,
+    the payload now exposes:
+
+    * ``basket_size`` (int) — the equal-weight basket size (``Q``,
+      currently 5) used to size both legs of the long-short strategy.
+      Defaults to ``len(signal_result["long_basket"])`` when not
+      supplied explicitly.  Consumed by the SECTION 4 dashboard for
+      transaction-cost calculations.
+    * ``history[*].realized_return`` (float | null) — the equal-weighted
+      long-short OC return realised on ``t+1`` for each past signal
+      date; ``null`` for dates whose ``t+1`` has not yet been observed
+      (most importantly the current signal day).
+
+    Look-ahead safety
+    -----------------
+    ``realized_return`` is computed strictly from ``oc_returns`` rows
+    *after* the signal date and is therefore a purely backward-looking
+    attribution.  Signal generation (:func:`src.signal_generator.generate_signal`)
+    does not see and is not changed by this addition.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     date_obj = signal_result["date"]
     date_str = (
@@ -238,8 +369,12 @@ def _write_docs_data_json(
     factor_scores = np.asarray(signal_result["factor_scores"]).ravel().tolist()
     all_scores_series: pd.Series = signal_result["all_scores"]
 
+    if basket_size is None:
+        basket_size = len(signal_result["long_basket"])
+
     payload = {
         "last_updated": datetime.now(_JST).isoformat(),
+        "basket_size": int(basket_size),
         "current_signal": {
             "date": date_str,
             "long_basket": list(signal_result["long_basket"]),
@@ -249,7 +384,9 @@ def _write_docs_data_json(
                 tk: float(all_scores_series[tk]) for tk in JP_TICKERS
             },
         },
-        "history": _build_history(signals_dir, HISTORY_LIMIT),
+        "history": _build_history(
+            signals_dir, HISTORY_LIMIT, oc_returns=oc_returns
+        ),
     }
     out_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -385,8 +522,29 @@ def run_pipeline(
         _log("SAVE", f"writing {signal_csv_path}")
         _write_signal_csv(signal_result, lot_result, signal_csv_path)
 
+        # Realised-return attribution layer.
+        #
+        # NOTE on look-ahead safety: generate_signal() above has *already*
+        # produced today's basket using only data up to date t (see the
+        # "Look-ahead safety" docstring section in src/signal_generator.py).
+        # The OC return frame below is constructed strictly for ex-post
+        # P/L attribution of *past* signal days — its t+1 rows are read
+        # only when populating history entries for dates strictly before
+        # today.  For the current signal date (t = close_df.index[-1])
+        # there is no t+1 row, so its realized_return is left null.
+        oc_returns_jp = compute_oc_returns(
+            open_df[JP_TICKERS], close_df[JP_TICKERS]
+        )
+        basket_size = SignalConfig().basket_size(N_JP)
+
         _log("SAVE", f"writing {docs_data_path}")
-        _write_docs_data_json(signal_result, signals_dir, docs_data_path)
+        _write_docs_data_json(
+            signal_result,
+            signals_dir,
+            docs_data_path,
+            oc_returns=oc_returns_jp,
+            basket_size=basket_size,
+        )
         summary["steps"].append("save")
         summary["signal_csv"] = str(signal_csv_path)
         summary["docs_data"] = str(docs_data_path)
