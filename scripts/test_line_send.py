@@ -130,10 +130,10 @@ def main() -> int:
     else:
         jst_now = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d %H:%M:%S %Z")
         message = (
-            "[smoke test] sector lead-lag LINE notifier\n"
-            f"time: {jst_now}\n"
-            "this is a canned ping from scripts/test_line_send.py.\n"
-            "if you see this on your phone, send_line_message works end-to-end."
+            "[動作確認] 日米業種リードラグ LINE通知\n"
+            f"時刻: {jst_now}\n"
+            "これは scripts/test_line_send.py から送信した動作確認メッセージです。\n"
+            "この通知がスマホに届けば send_line_message が正常に動作しています。"
         )
 
     print("[send] pushing to LINE...")

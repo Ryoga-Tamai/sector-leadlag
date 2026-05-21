@@ -95,10 +95,10 @@ def test_format_signal_message_has_aggregate_exposure():
 
 
 def test_format_signal_message_includes_lot_counts():
-    """Lot counts should be visible per row (e.g., lots=168, lots=10)."""
+    """Lot counts should be visible per row (e.g., 数量=168, 数量=10)."""
     msg = format_signal_message(_dummy_signal_result(), _dummy_lot_result(), 5_000_000)
-    assert "lots=168" in msg  # 1629.T row
-    assert "lots= 10" in msg or "lots=10" in msg  # 1617.T row
+    assert "数量=168" in msg  # 1629.T row
+    assert "数量= 10" in msg or "数量=10" in msg  # 1617.T row
 
 
 def test_format_signal_message_truncates_when_too_long():
@@ -193,14 +193,14 @@ def _capture_send(sent: dict[str, str]):
 
 
 def test_send_error_notification_envelope_format():
-    """Error envelope must include the [ERROR] tag, a timestamp, and the body."""
+    """Error envelope must include the [エラー] tag, a timestamp, and the body."""
     sent: dict[str, str] = {}
     with patch("src.line_notifier.send_line_message",
                side_effect=_capture_send(sent)):
         ok = send_error_notification("KeyError: 'foo'", "tok", "U123")
     assert ok is True
-    assert "[ERROR]" in sent["msg"]
-    assert "time:" in sent["msg"]
+    assert "[エラー]" in sent["msg"]
+    assert "時刻:" in sent["msg"]
     assert "KeyError: 'foo'" in sent["msg"]
 
 

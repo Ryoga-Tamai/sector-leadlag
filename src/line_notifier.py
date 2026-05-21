@@ -52,10 +52,10 @@ _LINE_TEXT_LIMIT = 4900  # LINE allows 5000 chars; keep a small margin
 # ---------------------------------------------------------------------------
 
 def _format_basket_row(row: Mapping[str, Any]) -> str:
-    """One line for the long/short table: ``T123  業種  lots=N``."""
+    """One line for the long/short table: ``T123  業種  数量=N``."""
     sector = JP_SECTOR_NAMES.get(row["ticker"], "?")
     # 業種名は最大 9 文字（情報通信・サービスその他）に揃える
-    return f"  {row['ticker']:8s}{sector:<10s} lots={row['lots']:>3d}"
+    return f"  {row['ticker']:8s}{sector:<10s} 数量={row['lots']:>3d}"
 
 
 def format_signal_message(
@@ -97,23 +97,23 @@ def format_signal_message(
     short_rows = "\n".join(_format_basket_row(r) for r in lot_result["short"])
 
     lines = [
-        f"[{date_str}] sector lead-lag signal",
+        f"[{date_str}] 日米業種リードラグ シグナル",
         "",
-        f"capital: {capital_jpy:,.0f} JPY",
+        f"資金: {capital_jpy:,.0f} 円",
         "",
-        "LONG (top 5):",
+        "買い（上位5）:",
         long_rows,
         "",
-        "SHORT (bottom 5):",
+        "売り（下位5）:",
         short_rows,
         "",
-        f"factor scores: {f_str}",
+        f"ファクタースコア: {f_str}",
         "",
-        "exposure:",
-        f"  long  : {lot_result['total_long_value']:>12,.0f}",
-        f"  short : {lot_result['total_short_value']:>12,.0f}",
-        f"  gross : {lot_result['total_gross_exposure']:>12,.0f}",
-        f"  cash  : {lot_result['cash_remaining']:>12,.0f}",
+        "エクスポージャー:",
+        f"  買い : {lot_result['total_long_value']:>12,.0f}",
+        f"  売り : {lot_result['total_short_value']:>12,.0f}",
+        f"  総額 : {lot_result['total_gross_exposure']:>12,.0f}",
+        f"  余力 : {lot_result['cash_remaining']:>12,.0f}",
     ]
     message = "\n".join(lines)
     if len(message) > _LINE_TEXT_LIMIT:
@@ -139,8 +139,8 @@ def send_error_notification(
     body = error_message if len(error_message) <= body_limit \
         else error_message[: body_limit - 3] + "..."
     msg = (
-        "[ERROR] sector lead-lag pipeline\n"
-        f"time: {timestamp}\n"
+        "[エラー] 日米業種リードラグ パイプライン\n"
+        f"時刻: {timestamp}\n"
         "----\n"
         f"{body}"
     )
