@@ -4,7 +4,13 @@
       "Bash(brew install *)",
       "Bash(python3.11 --version)",
       "Read(//opt/homebrew/bin/**)",
-      "Read(//usr/local/bin/**)"
+      "Read(//usr/local/bin/**)",
+      "Bash(git restore *)",
+      "Bash(git merge *)",
+      "Bash(git commit --no-verify -m ' *)",
+      "Bash(python -m pytest -q)",
+      "Bash(git checkout *)",
+      "Bash(python -c ' *)"
     ]
   }
 }
